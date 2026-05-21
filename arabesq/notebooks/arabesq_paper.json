@@ -1,0 +1,172 @@
+{
+ "cells": [
+  {
+   "cell_type": "markdown",
+   "id": "9981d9c9",
+   "metadata": {},
+   "source": [
+    "\n**SUBA COEX weighting (defaults used in this notebook)**\n\n- `new_rank` = Mutual Rank (MR): lower is stronger (1 best).\n- `ave` (\u22481\u201325): higher is stronger.\n- `connect` provides a spatial prior: match=1.0, adjacent=0.5, distant=0.0, unclear=0.0.\n- Base COEX weight = geometric mean: `sqrt(mr_norm * ave_norm)`; final weight multiplies the spatial prior.\n\n",
+    "# ARABESQ: Multi-relational GNN for Dual-targeted Protein Localization (Repro Notebook)\n",
+    "\n",
+    "This notebook is a **paper-ready** template that:\n",
+    "1. Ingests train/val/test CSVs\n",
+    "2. Extracts ESM-2 embeddings (global + N-terminus)\n",
+    "3. Builds heterogeneous graphs (SIM, PPI, COEX)\n",
+    "4. Trains ARABESQ with ablations (SIM / SIM+PPI / SIM+COEX / SIM+PPI+COEX)\n",
+    "5. Calibrates probabilities (isotonic regression on validation)\n",
+    "6. Reports metrics + exports figures (confusion matrices, graph stats)\n",
+    "\n",
+    "> Notes:\n",
+    "> - You need a GPU (recommended) to compute ESM-2 embeddings, or provide `esm2_embeddings.npz`.\n",
+    "> - SUBA COEX `new_rank` direction is ambiguous; choose `--coex_rank_mode` accordingly.\n"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "dfff33d5",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# If running locally, install deps first:\n",
+    "# !pip install -r requirements.txt\n",
+    "\n",
+    "import os, json\n",
+    "from pathlib import Path\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "85d417f2",
+   "metadata": {},
+   "source": [
+    "## 1) Configure paths"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "f52755c5",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "TRAIN_CSV = \"path/to/train.csv\"\n",
+    "VAL_CSV   = \"path/to/val.csv\"\n",
+    "TEST_CSV  = \"path/to/test.csv\"\n",
+    "\n",
+    "SUBA_PPI  = \"path/to/suba_ppi.csv\"      # optional\n",
+    "SUBA_COEX = \"path/to/suba_coex.csv\"     # optional\n",
+    "\n",
+    "OUT_DIR = \"runs/paper_repro\"\n",
+    "Path(OUT_DIR).mkdir(parents=True, exist_ok=True)\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "6e320e08",
+   "metadata": {},
+   "source": [
+    "## 2) Run benchmark (all graph setups)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "5e286299",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "# From notebook, call the CLI (recommended for reproducibility)\n",
+    "# You can change ESM-2 model size, KNN k, thresholds, etc.\n",
+    "\n",
+    "cmd = f\"\"\"python -m arabesq.cli benchmark \\\n",
+    "  --train_csv {TRAIN_CSV} \\\n",
+    "  --val_csv   {VAL_CSV} \\\n",
+    "  --test_csv  {TEST_CSV} \\\n",
+    "  --ppi_csv  {SUBA_PPI} \\\n",
+    "  --coex_csv {SUBA_COEX} \\\n",
+    "  --out_dir   {OUT_DIR} \\\n",
+    "  --knn_k 20 \\\n",
+    "  --coex_gate \\\n",
+    "  --coex_rank_mode lower_is_stronger \\\n",
+    "  --ppi_conf_method paper_count \\\n",
+    "  --out_mode multilabel \\\n",
+    "  --max_epochs 100 \\\n",
+    "  --patience 15\n",
+    "\"\"\"\n",
+    "\n",
+    "print(cmd)\n",
+    "# !{cmd}\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "5e5a5c2c",
+   "metadata": {},
+   "source": [
+    "## 3) Inspect outputs"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "3af42dc9",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "import pandas as pd\n",
+    "from glob import glob\n",
+    "\n",
+    "for setup in [\"SIM\",\"SIM_PPI\",\"SIM_COEX\",\"SIM_PPI_COEX\"]:\n",
+    "    mpath = Path(OUT_DIR)/setup/\"metrics_overall.json\"\n",
+    "    if mpath.exists():\n",
+    "        print(setup, json.loads(mpath.read_text()))\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "b0a66e48",
+   "metadata": {},
+   "source": [
+    "## 4) Predict on new proteins (option A: pretrained checkpoint)"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": null,
+   "id": "7d97704f",
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "CKPT = str(Path(OUT_DIR)/\"SIM_PPI_COEX\"/\"model_best.pt\")\n",
+    "CAL  = str(Path(OUT_DIR)/\"SIM_PPI_COEX\"/\"isotonic.joblib\")\n",
+    "\n",
+    "NEW_CSV = \"path/to/new_proteins.csv\"   # must include Gene and sequence\n",
+    "OUT_PRED = str(Path(OUT_DIR)/\"new_predictions.csv\")\n",
+    "\n",
+    "cmd_pred = f\"\"\"python -m arabesq.cli predict \\\n",
+    "  --ckpt {CKPT} \\\n",
+    "  --calibrator {CAL} \\\n",
+    "  --input_csv {NEW_CSV} \\\n",
+    "  --out_csv {OUT_PRED}\n",
+    "\"\"\"\n",
+    "print(cmd_pred)\n",
+    "# !{cmd_pred}\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "id": "ddb786e8",
+   "metadata": {},
+   "source": [
+    "## 5) Notes for the paper methods section\n",
+    "- Report graph stats from each setup's `graph_stats.json`.\n",
+    "- Report ablation table using each setup's `metrics_overall.json`.\n",
+    "- Include confusion matrices from each setup's `confusion.png`.\n"
+   ]
+  }
+ ],
+ "metadata": {},
+ "nbformat": 4,
+ "nbformat_minor": 5
+}

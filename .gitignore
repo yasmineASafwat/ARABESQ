@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# ML models / embeddings
+*.pt
+*.pth
+*.npz
+*.joblib
+
+# Outputs
+runs/
+outputs/
+logs/
+
+# Data
+data/
+datasets/
+
+# Environments
+.env
+venv/
+.venv/
+
+# OS files
+.DS_Store
